@@ -1,6 +1,6 @@
 name: vonage_video_flutter
 description: "A comprehensive Flutter plugin for Vonage Video API with full access to video call features and native rendering on Android and iOS."
-version: 0.0.1
+version: 0.0.2
 homepage: https://github.com/yourusername/vonage_video_flutter
 
 environment:

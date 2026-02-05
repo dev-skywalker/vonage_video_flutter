@@ -1,6 +1,7 @@
 package com.example.vonage_video_flutter
 
 import android.content.Context
+import android.util.Log
 import com.opentok.android.OpentokError
 import com.opentok.android.Publisher
 import com.opentok.android.PublisherKit
@@ -11,22 +12,32 @@ import com.opentok.android.SubscriberKit
 import io.flutter.plugin.common.EventChannel
 
 class VonageSessionManager(private val context: Context) : EventChannel.StreamHandler {
+    companion object {
+        private const val TAG = "VonageSessionManager"
+    }
+
     private var session: Session? = null
     private var publisher: Publisher? = null
     private val subscribers = mutableMapOf<String, Subscriber>()
+    private val sessionStreams = mutableMapOf<String, Stream>()
     private var eventSink: EventChannel.EventSink? = null
+    private var initialCameraPosition: String = "front"
 
     // Session callbacks
     private val sessionListener = object : Session.SessionListener {
         override fun onConnected(session: Session) {
+            Log.d(TAG, "Session connected successfully. Session ID: ${session.sessionId}")
             sendEvent(mapOf("type" to "sessionConnected"))
         }
 
         override fun onDisconnected(session: Session) {
+            Log.d(TAG, "Session disconnected. Session ID: ${session.sessionId}")
             sendEvent(mapOf("type" to "sessionDisconnected"))
         }
 
         override fun onStreamReceived(session: Session, stream: Stream) {
+            Log.d(TAG, "Stream received. Stream ID: ${stream.streamId}, Name: ${stream.name}")
+            sessionStreams[stream.streamId] = stream
             sendEvent(
                 mapOf(
                     "type" to "streamReceived",
@@ -36,17 +47,20 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
         }
 
         override fun onStreamDropped(session: Session, stream: Stream) {
+            Log.d(TAG, "Stream dropped. Stream ID: ${stream.streamId}")
             sendEvent(
                 mapOf(
                     "type" to "streamDropped",
                     "stream" to streamToMap(stream)
                 )
             )
-            // Clean up subscriber if it exists
+            // Clean up subscriber and stream if it exists
             subscribers.remove(stream.streamId)
+            sessionStreams.remove(stream.streamId)
         }
 
         override fun onError(session: Session, error: OpentokError) {
+            Log.e(TAG, "Session error - Code: ${error.errorCode}, Message: ${error.message}, Exception: ${error.exception}")
             sendEvent(
                 mapOf(
                     "type" to "sessionError",
@@ -62,14 +76,17 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
     // Publisher callbacks
     private val publisherListener = object : PublisherKit.PublisherListener {
         override fun onStreamCreated(publisher: PublisherKit, stream: Stream) {
+            Log.d(TAG, "Publisher stream created. Stream ID: ${stream.streamId}")
             sendEvent(mapOf("type" to "publisherStarted"))
         }
 
         override fun onStreamDestroyed(publisher: PublisherKit, stream: Stream) {
+            Log.d(TAG, "Publisher stream destroyed. Stream ID: ${stream.streamId}")
             sendEvent(mapOf("type" to "publisherStopped"))
         }
 
         override fun onError(publisher: PublisherKit, error: OpentokError) {
+            Log.e(TAG, "Publisher error - Code: ${error.errorCode}, Message: ${error.message}, Exception: ${error.exception}")
             sendEvent(
                 mapOf(
                     "type" to "publisherError",
@@ -84,9 +101,21 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
 
     // Connect to session
     fun connect(apiKey: String, sessionId: String, token: String) {
-        session = Session.Builder(context, apiKey, sessionId).build().apply {
-            setSessionListener(sessionListener)
-            connect(token)
+        Log.d(TAG, "Attempting to connect to session...")
+        Log.d(TAG, "API Key: $apiKey")
+        Log.d(TAG, "Session ID: $sessionId")
+        Log.d(TAG, "Token (first 50 chars): ${token.take(50)}...")
+
+        try {
+            session = Session.Builder(context, apiKey, sessionId).build().apply {
+                setSessionListener(sessionListener)
+                Log.d(TAG, "Session object created, calling connect()...")
+                connect(token)
+                Log.d(TAG, "connect() called successfully")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception during session connection: ${e.message}", e)
+            throw e
         }
     }
 
@@ -103,17 +132,15 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
 
     // Initialize publisher
     fun initPublisher(name: String?, publishAudio: Boolean, publishVideo: Boolean, cameraPosition: String) {
+        initialCameraPosition = cameraPosition
         publisher = Publisher.Builder(context).apply {
             name?.let { name(it) }
             audioTrack(publishAudio)
             videoTrack(publishVideo)
-            if (cameraPosition == "back") {
-                cameraId(Publisher.CameraId.BACK)
-            } else {
-                cameraId(Publisher.CameraId.FRONT)
-            }
         }.build().apply {
             setPublisherListener(publisherListener)
+            // Note: Vonage SDK starts with front camera by default
+            // If back camera is requested, we'll need to cycle after publishing
         }
     }
 
@@ -121,6 +148,10 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
     fun publish() {
         publisher?.let { pub ->
             session?.publish(pub)
+            // If back camera was requested, cycle to it after publishing
+            if (initialCameraPosition == "back") {
+                pub.cycleCamera()
+            }
         }
     }
 
@@ -148,11 +179,17 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
 
     // Subscribe to stream
     fun subscribe(streamId: String) {
-        val stream = session?.streams?.find { it.streamId == streamId } ?: return
+        Log.d(TAG, "Subscribing to stream: $streamId")
+        val stream = sessionStreams[streamId]
+        if (stream == null) {
+            Log.e(TAG, "Stream not found for ID: $streamId")
+            return
+        }
 
         val subscriber = Subscriber.Builder(context, stream).build().apply {
             setSubscriberListener(object : SubscriberKit.SubscriberListener {
                 override fun onConnected(subscriber: SubscriberKit) {
+                    Log.d(TAG, "Subscriber connected for stream: $streamId")
                     sendEvent(
                         mapOf(
                             "type" to "subscriberConnected",
@@ -162,6 +199,7 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
                 }
 
                 override fun onDisconnected(subscriber: SubscriberKit) {
+                    Log.d(TAG, "Subscriber disconnected for stream: $streamId")
                     sendEvent(
                         mapOf(
                             "type" to "subscriberDisconnected",
@@ -171,6 +209,7 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
                 }
 
                 override fun onError(subscriber: SubscriberKit, error: OpentokError) {
+                    Log.e(TAG, "Subscriber error for stream $streamId - Code: ${error.errorCode}, Message: ${error.message}")
                     sendEvent(
                         mapOf(
                             "type" to "subscriberError",
@@ -187,6 +226,7 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
 
         subscribers[streamId] = subscriber
         session?.subscribe(subscriber)
+        Log.d(TAG, "Subscriber created and subscribed for stream: $streamId")
     }
 
     // Unsubscribe from stream
@@ -243,6 +283,7 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
         publisher = null
         subscribers.values.forEach { it.destroy() }
         subscribers.clear()
+        sessionStreams.clear()
         session = null
     }
 }
