@@ -106,6 +106,12 @@ class VonageSessionManager(private val context: Context) : EventChannel.StreamHa
         Log.d(TAG, "Session ID: $sessionId")
         Log.d(TAG, "Token (first 50 chars): ${token.take(50)}...")
 
+        // Clean up any existing session/publisher before connecting
+        if (session != null || publisher != null) {
+            Log.d(TAG, "Cleaning up previous session before connecting...")
+            cleanup()
+        }
+
         try {
             session = Session.Builder(context, apiKey, sessionId).build().apply {
                 setSessionListener(sessionListener)

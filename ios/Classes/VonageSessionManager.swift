@@ -23,6 +23,10 @@ class VonageSessionManager: NSObject, FlutterStreamHandler {
     // MARK: - Session Methods
 
     func connect(apiKey: String, sessionId: String, token: String) {
+        // Clean up any existing session/publisher before connecting
+        if session != nil || publisher != nil {
+            cleanup()
+        }
         session = OTSession(apiKey: apiKey, sessionId: sessionId, delegate: self)
         var error: OTError?
         session?.connect(withToken: token, error: &error)
